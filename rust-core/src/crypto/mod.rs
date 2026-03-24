@@ -1,21 +1,21 @@
+//! Cryptographic primitives for the Chameleon protocol.
+//!
+//! * [`hkdf`] — HKDF key derivation (RFC 5869)
+//! * [`cipher`] — ChaCha20-Poly1305 AEAD (RFC 8439)
+
+pub mod cipher;
+pub mod hkdf;
+
 use thiserror::Error;
 
+pub use cipher::{decrypt, encrypt};
+pub use hkdf::{derive_session_key, rotate_key};
+
+/// Errors returned by cryptographic operations.
 #[derive(Debug, Error)]
 pub enum CryptoError {
-    #[error("invalid key material")]
-    InvalidKeyMaterial,
-}
-
-pub fn derive_session_key(master_psk: &[u8], salt: &[u8]) -> Result<[u8; 32], CryptoError> {
-    if master_psk.is_empty() || salt.is_empty() {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
-
-    let mut key = [0_u8; 32];
-    for (idx, byte) in key.iter_mut().enumerate() {
-        let p = master_psk[idx % master_psk.len()];
-        let s = salt[idx % salt.len()];
-        *byte = p ^ s ^ (idx as u8);
-    }
-    Ok(key)
+    #[error("encryption failed")]
+    EncryptionFailed,
+    #[error("decryption failed (authentication tag mismatch)")]
+    DecryptionFailed,
 }
