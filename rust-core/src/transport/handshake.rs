@@ -60,6 +60,29 @@ pub fn server_config() -> Result<(quinn::ServerConfig, SelfSignedCert), String> 
     Ok((server_cfg, cert))
 }
 
+/// Build a `rustls::ClientConfig` for HTTP/2 with ALPN `h2`.
+pub fn client_crypto_config_h2() -> rustls::ClientConfig {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut cfg = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(InsecureServerVerifier))
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    cfg
+}
+
+/// Build a TLS server config for HTTP/2 with ALPN `h2`.
+pub fn server_tls_config_h2() -> Result<(rustls::ServerConfig, SelfSignedCert), String> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let cert = generate_self_signed()?;
+    let mut tls_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.cert_der.clone()], cert.key_der.clone_key())
+        .map_err(|e| e.to_string())?;
+    tls_config.alpn_protocols = vec![b"h2".to_vec()];
+    Ok((tls_config, cert))
+}
+
 // ---------------------------------------------------------------------------
 // Insecure verifier — lab / test use only
 // ---------------------------------------------------------------------------

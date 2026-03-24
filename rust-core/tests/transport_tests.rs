@@ -7,7 +7,7 @@
 use std::net::SocketAddr;
 
 use chameleon_core::transport::{
-    QuicTransport, TransportConfig, TransportMode,
+    QuicTransport, Transport, TransportConfig, TransportMode,
 };
 
 // ---------------------------------------------------------------------------
@@ -171,5 +171,79 @@ async fn test_end_to_end_weaver_crypto_quic() {
 
     // 5. Decrypt and verify
     let recovered = ChameleonFrame::decrypt_with_aad(&received, &key, &nonce, aad).unwrap();
+    assert_eq!(recovered, frame);
+}
+
+// ---------------------------------------------------------------------------
+// 6. HTTP/2 echo roundtrip
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_http2_echo_roundtrip() {
+    use chameleon_core::transport::http2::Http2Server;
+    use chameleon_core::transport::Http2Transport;
+
+    let server = Http2Server::bind("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let server_addr = server.local_addr().unwrap();
+
+    let payload = b"http2-test-payload";
+
+    let server_handle = tokio::spawn(async move { server.accept_and_echo().await.unwrap() });
+
+    let client = Http2Transport::new(TransportConfig::default());
+    let mut conn = client.connect(server_addr, "localhost").await.unwrap();
+    let response = conn.send(payload).await.unwrap();
+
+    let received = server_handle.await.unwrap();
+
+    assert_eq!(received, payload);
+    assert_eq!(response, payload); // echoed back
+}
+
+// ---------------------------------------------------------------------------
+// 7. Unified Transport: encrypt frame → QUIC → decrypt
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_transport_unified_send_frame() {
+    use chameleon_core::crypto;
+    use chameleon_core::frame::model::FrameType;
+    use chameleon_core::frame::ChameleonFrame;
+
+    let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let (server_ep, _cert) = QuicTransport::bind_server(addr).await.unwrap();
+    let server_addr = server_ep.local_addr().unwrap();
+
+    let key = crypto::derive_session_key(b"psk", b"salt", b"unified");
+    let nonce = [0x42; 12];
+
+    let frame = ChameleonFrame {
+        stream_id: 7,
+        frame_type: FrameType::Data,
+        payload: vec![0xAA; 100],
+    };
+
+    let server_handle = tokio::spawn(async move {
+        let incoming = server_ep.accept().await.unwrap();
+        let conn = incoming.await.unwrap();
+        let data = QuicTransport::recv(&conn).await.unwrap();
+        conn.close(0u32.into(), b"done");
+        ChameleonFrame::decrypt_with_aad(&data, &key, &nonce, b"transport-test").unwrap()
+    });
+
+    let mut config = TransportConfig::default();
+    config.mode = TransportMode::Quic;
+    let mut transport = Transport::new(config, key);
+    transport.connect(server_addr, "localhost").await.unwrap();
+    transport
+        .send_frame(&frame, &nonce, b"transport-test")
+        .await
+        .unwrap();
+
+    let recovered = server_handle.await.unwrap();
+    transport.close();
+
     assert_eq!(recovered, frame);
 }

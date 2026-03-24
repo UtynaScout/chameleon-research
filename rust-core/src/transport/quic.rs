@@ -25,11 +25,19 @@ impl QuicTransport {
     }
 
     /// Bind a client endpoint on an OS-assigned port.
+    ///
+    /// Applies `config.mtu` as the QUIC initial MTU.
     pub async fn bind_client(&mut self) -> Result<(), TransportError> {
         let crypto = handshake::client_crypto_config();
         let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
             .map_err(|e| TransportError::HandshakeFailed(e.to_string()))?;
-        let client_cfg = ClientConfig::new(Arc::new(quic_crypto));
+
+        let mut transport_cfg = quinn::TransportConfig::default();
+        transport_cfg.initial_mtu(self.config.mtu as u16);
+
+        let mut client_cfg = ClientConfig::new(Arc::new(quic_crypto));
+        client_cfg.transport_config(Arc::new(transport_cfg));
+
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
             .map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
         endpoint.set_default_client_config(client_cfg);
@@ -107,5 +115,15 @@ impl QuicTransport {
         if let Some(conn) = self.connection.take() {
             conn.close(0u32.into(), b"done");
         }
+    }
+
+    /// Returns a reference to the underlying QUIC connection, if established.
+    pub fn connection(&self) -> Option<&quinn::Connection> {
+        self.connection.as_ref()
+    }
+
+    /// Returns the configured MTU.
+    pub fn mtu(&self) -> usize {
+        self.config.mtu
     }
 }
