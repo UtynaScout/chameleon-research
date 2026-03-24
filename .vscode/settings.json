@@ -1,0 +1,10 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "rust-analyzer.cargo.features": "all",
+  "editor.formatOnSave": true,
+  "copilot.enable": {
+    "*": true,
+    "plaintext": false,
+    "markdown": false
+  }
+}

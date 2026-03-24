@@ -1,0 +1,4 @@
+{
+  "base_profile": "default_profile.json",
+  "notes": "Browser-like bursty request/response profile for lab simulation"
+}

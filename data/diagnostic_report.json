@@ -1,0 +1,31 @@
+{
+  "version": "v0.3.1",
+  "generated_at": "2026-03-24",
+  "profile_type": "synthetic-lab",
+  "metrics": {
+    "d_kl_size": 0.0348,
+    "d_kl_iat": 0.0670,
+    "up_down_diff": 0.0667
+  },
+  "top_bins": {
+    "size": [
+      {"range": "509.3-622.2", "ref_pct": 8.33, "gen_pct": 4.75, "kl_contrib": 0.0468},
+      {"range": "170.8-283.7", "ref_pct": 8.33, "gen_pct": 5.37, "kl_contrib": 0.0365},
+      {"range": "283.7-396.5", "ref_pct": 8.33, "gen_pct": 5.47, "kl_contrib": 0.0350},
+      {"range": "960.7-1073.5", "ref_pct": 8.33, "gen_pct": 7.60, "kl_contrib": 0.0077},
+      {"range": "1299.2-1412.0", "ref_pct": 8.33, "gen_pct": 8.22, "kl_contrib": 0.0011}
+    ],
+    "iat": [
+      {"range": "14.12-17.14", "ref_pct": 9.09, "gen_pct": 4.30, "kl_contrib": 0.0680},
+      {"range": "5.07-8.08", "ref_pct": 27.27, "gen_pct": 22.86, "kl_contrib": 0.0482},
+      {"range": "23.18-26.20", "ref_pct": 9.09, "gen_pct": 5.45, "kl_contrib": 0.0465},
+      {"range": "8.08-11.10", "ref_pct": 9.09, "gen_pct": 9.00, "kl_contrib": 0.0009},
+      {"range": "17.14-20.16", "ref_pct": 0.00, "gen_pct": 0.00, "kl_contrib": 0.0000}
+    ]
+  },
+  "notes": [
+    "For synthetic benchmark only",
+    "Not intended for detection evasion",
+    "Use as baseline for future lab iterations"
+  ]
+}

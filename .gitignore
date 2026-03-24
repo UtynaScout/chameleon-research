@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Data artifacts
+*.pcap
+*.pcapng
+*.log
+
+# Rust
+rust-core/target/
+target/
+
+# OS/Editor
+.DS_Store
+Thumbs.db
+.vscode/*.code-workspace
