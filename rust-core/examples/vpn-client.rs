@@ -150,15 +150,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tun_r = tun.clone();
     let tun_w = tun.clone();
 
-    // TUN → Tunnel: capture local traffic, encrypt, send to server
+    // TUN → Tunnel: capture local IPv4 traffic, encrypt, send to server
     let t1 = tokio::spawn(async move {
         let mut buf = vec![0u8; 65535];
         loop {
             match tun_r.read(&mut buf).await {
-                Ok(n) => {
+                Ok(n) if n >= 20 && (buf[0] >> 4) == 4 => {
                     if tunnel_tx.send_packet(&buf[..n]).await.is_err() {
                         break;
                     }
+                }
+                Ok(_) => {
+                    // Skip non-IPv4 packets (IPv6, etc.)
                 }
                 Err(e) => {
                     warn!("TUN read: {e}");

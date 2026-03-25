@@ -131,7 +131,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     RouteManager::enable_ip_forwarding()?;
     RouteManager::add_nat_rule(&settings.external_iface)?;
-    info!(iface = %settings.external_iface, "IP forwarding + NAT enabled");
+    RouteManager::add_forward_rules(tun.name(), &settings.external_iface)?;
+    info!(iface = %settings.external_iface, "IP forwarding + NAT + FORWARD rules enabled");
 
     // ---- Shared channels ----
     let routes: ClientRoutes = Arc::new(RwLock::new(HashMap::new()));
@@ -147,14 +148,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Background: read TUN and dispatch to per-client channels by IPv4 dst
+    // Background: read TUN and dispatch IPv4 packets to per-client channels by dst
     let tun_r = tun.clone();
     let routes_reader = Arc::clone(&routes);
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65535];
         loop {
             match tun_r.read(&mut buf).await {
-                Ok(n) if n >= 20 => {
+                Ok(n) if n >= 20 && (buf[0] >> 4) == 4 => {
                     let dst = Ipv4Addr::new(buf[16], buf[17], buf[18], buf[19]);
                     let map = routes_reader.read().await;
                     if let Some(tx) = map.get(&dst) {
@@ -206,7 +207,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             _ = &mut shutdown => {
-                info!("Shutting down — cleaning NAT rules");
+                info!("Shutting down — cleaning NAT/FORWARD rules");
+                let _ = RouteManager::remove_forward_rules(tun.name(), &settings.external_iface);
                 let _ = RouteManager::remove_nat_rule(&settings.external_iface);
                 endpoint.close(0u32.into(), b"shutdown");
                 break;
@@ -243,13 +245,23 @@ async fn handle_client(
         loop {
             match tunnel_rx.recv_packet().await {
                 Ok(pkt) => {
-                    if pkt.len() >= 20 {
+                    // Only process valid IPv4 packets
+                    if pkt.len() >= 20 && (pkt[0] >> 4) == 4 {
                         let src = Ipv4Addr::new(pkt[12], pkt[13], pkt[14], pkt[15]);
-                        let mut map = routes_learn.write().await;
-                        if !map.contains_key(&src) {
-                            info!(%src, "Learned client IP");
-                            map.insert(src, client_tx_learn.clone());
-                            learned_t1.write().await.push(src);
+                        // Only learn IPs in the VPN subnet (10.8.0.0/24)
+                        // Skip unspecified, broadcast, and non-VPN addresses
+                        if src.octets()[0] == 10
+                            && src.octets()[1] == 8
+                            && src.octets()[2] == 0
+                            && src.octets()[3] != 0
+                            && src.octets()[3] != 255
+                        {
+                            let mut map = routes_learn.write().await;
+                            if !map.contains_key(&src) {
+                                info!(%src, "Learned client IP");
+                                map.insert(src, client_tx_learn.clone());
+                                learned_t1.write().await.push(src);
+                            }
                         }
                     }
                     if to_tun.send(pkt).await.is_err() {

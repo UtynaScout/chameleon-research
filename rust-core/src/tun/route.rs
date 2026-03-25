@@ -17,9 +17,15 @@ impl RouteManager {
     }
 
     /// Replace the default route to send all traffic through the TUN device.
+    /// Deletes all existing default routes first to avoid conflicts with DHCP/NetworkManager.
     pub fn set_default_route(tun_name: &str) -> Result<(), TunError> {
-        let _ = run_cmd("ip", &["route", "del", "default"]);
-        run_cmd("ip", &["route", "add", "default", "dev", tun_name])
+        // Delete ALL default routes (DHCP/NetworkManager may add multiple)
+        loop {
+            if run_cmd("ip", &["route", "del", "default"]).is_err() {
+                break;
+            }
+        }
+        run_cmd("ip", &["route", "add", "default", "dev", tun_name, "scope", "global"])
     }
 
     /// Restore the original default route through a gateway.
@@ -47,6 +53,40 @@ impl RouteManager {
                 "-t", "nat", "-A", "POSTROUTING", "-o", external_iface, "-j", "MASQUERADE",
             ],
         )
+    }
+
+    /// Add iptables FORWARD rules to allow traffic between TUN and external interfaces.
+    pub fn add_forward_rules(tun_name: &str, external_iface: &str) -> Result<(), TunError> {
+        // Allow forwarding from TUN to external interface
+        run_cmd(
+            "iptables",
+            &["-A", "FORWARD", "-i", tun_name, "-o", external_iface, "-j", "ACCEPT"],
+        )?;
+        // Allow established/related return traffic
+        run_cmd(
+            "iptables",
+            &[
+                "-A", "FORWARD", "-i", external_iface, "-o", tun_name,
+                "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT",
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Remove the FORWARD rules (best-effort, ignores errors).
+    pub fn remove_forward_rules(tun_name: &str, external_iface: &str) -> Result<(), TunError> {
+        let _ = run_cmd(
+            "iptables",
+            &["-D", "FORWARD", "-i", tun_name, "-o", external_iface, "-j", "ACCEPT"],
+        );
+        let _ = run_cmd(
+            "iptables",
+            &[
+                "-D", "FORWARD", "-i", external_iface, "-o", tun_name,
+                "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT",
+            ],
+        );
+        Ok(())
     }
 
     /// Remove the NAT rule (best-effort, ignores errors).
@@ -112,6 +152,12 @@ impl RouteManager {
         Err(TunError::Unsupported)
     }
     pub fn add_nat_rule(_external_iface: &str) -> Result<(), TunError> {
+        Err(TunError::Unsupported)
+    }
+    pub fn add_forward_rules(_tun_name: &str, _external_iface: &str) -> Result<(), TunError> {
+        Err(TunError::Unsupported)
+    }
+    pub fn remove_forward_rules(_tun_name: &str, _external_iface: &str) -> Result<(), TunError> {
         Err(TunError::Unsupported)
     }
     pub fn remove_nat_rule(_external_iface: &str) -> Result<(), TunError> {
