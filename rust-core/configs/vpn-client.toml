@@ -1,0 +1,15 @@
+# NetSynth VPN Client Configuration
+# Usage: sudo cargo run --example vpn-client -- --config configs/vpn-client.toml
+
+# VPN server address (IP:port)
+server = "192.168.1.100:4433"
+
+# Pre-shared key — must match the server
+psk = "change-me-in-production"
+
+# Client's TUN IP address in the VPN subnet
+# Each client must use a unique address (10.8.0.2, 10.8.0.3, ...)
+tun_addr = "10.8.0.2"
+
+# TUN device name
+tun_name = "tun0"

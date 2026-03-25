@@ -1,0 +1,42 @@
+# NetSynth VPN — Docker Compose
+#
+# Start server:  docker compose up vpn-server
+# Start client:  docker compose up vpn-client
+#
+# Both containers need NET_ADMIN capability and access to /dev/net/tun.
+
+services:
+  vpn-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    container_name: netsynth-vpn-server
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "4433:4433/udp"
+    environment:
+      - RUST_LOG=info
+    volumes:
+      - ../configs/vpn-server.toml:/etc/vpn-server.toml:ro
+    command: ["--config", "/etc/vpn-server.toml"]
+    restart: unless-stopped
+
+  vpn-client:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.client
+    container_name: netsynth-vpn-client
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - RUST_LOG=info
+    volumes:
+      - ../configs/vpn-client.toml:/etc/vpn-client.toml:ro
+    command: ["--config", "/etc/vpn-client.toml"]
+    depends_on:
+      - vpn-server

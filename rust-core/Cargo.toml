@@ -36,6 +36,10 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
+# TUN/VPN (Phase 5.0)
+libc = "0.2"
+toml = "0.8"
+
 [[example]]
 name = "server"
 path = "examples/server.rs"
@@ -43,6 +47,14 @@ path = "examples/server.rs"
 [[example]]
 name = "client"
 path = "examples/client.rs"
+
+[[example]]
+name = "vpn-server"
+path = "examples/vpn-server.rs"
+
+[[example]]
+name = "vpn-client"
+path = "examples/vpn-client.rs"
 
 [dev-dependencies]
 approx = "0.5"

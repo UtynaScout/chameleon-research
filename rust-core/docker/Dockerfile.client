@@ -1,0 +1,22 @@
+FROM rust:1.80-bookworm AS builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+COPY examples/ examples/
+
+RUN cargo build --release --example vpn-client
+
+# --- Runtime ---
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/examples/vpn-client /usr/local/bin/vpn-client
+COPY configs/vpn-client.toml /etc/vpn-client.toml
+
+ENTRYPOINT ["vpn-client"]
+CMD ["--config", "/etc/vpn-client.toml"]

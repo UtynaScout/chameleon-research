@@ -6,6 +6,50 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.0] — 2026-03-25
+
+### Added
+
+**VPN TUN/TAP Module (Phase 5.0)**
+- `src/tun/mod.rs` — TUN device abstraction (Linux via /dev/net/tun ioctl, non-Linux stubs)
+- `src/tun/route.rs` — OS-level route management (ip route, iptables NAT, ip_forward)
+- `VpnTunnel` — encrypted bidirectional QUIC tunnel with ChaCha20-Poly1305
+- `VpnTunnelSender` / `VpnTunnelReceiver` — split halves for concurrent relay
+- Counter-based nonce scheme with direction byte (12-byte: [4B direction LE][8B counter LE])
+- Wire format: `[2B length BE][encrypted IP packet]` on persistent QUIC bi-stream
+- Cross-platform compilation: Linux TUN + non-Linux stubs returning `TunError::Unsupported`
+
+**VPN Examples**
+- `examples/vpn-server.rs` — multi-client server with TUN, IP forwarding, NAT masquerade
+- `examples/vpn-client.rs` — client with TUN, route management, bidirectional relay
+- Auto-learn client IPs from IPv4 source header (no assignment protocol needed)
+- TOML config file support (`--config` flag)
+- Graceful Ctrl+C shutdown with NAT/route cleanup
+
+**Configuration & Docker**
+- `configs/vpn-server.toml` — server configuration template
+- `configs/vpn-client.toml` — client configuration template
+- `docker/Dockerfile.server` — multi-stage Docker build for server
+- `docker/Dockerfile.client` — multi-stage Docker build for client
+- `docker/docker-compose.yml` — orchestration with NET_ADMIN + /dev/net/tun
+
+**Documentation & Tests**
+- `docs/VPN-SETUP.md` — complete setup guide (architecture, deployment, troubleshooting)
+- 3 new VPN tunnel tests (roundtrip, 100-packet echo, 1400-byte large packet)
+- All tests cross-platform (QUIC-only, no TUN/root required)
+
+### Metrics
+
+| Metric | Value |
+|--------|-------|
+| Tests | 40 passing (+3 new) |
+| Warnings | 0 |
+
+### Dependencies
+- Added: `libc 0.2` (Linux TUN ioctl), `toml 0.8` (config parsing)
+
+---
+
 ## [1.0.0] — 2026-03-25
 
 ### Added

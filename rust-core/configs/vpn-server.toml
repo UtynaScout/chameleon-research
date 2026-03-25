@@ -1,0 +1,18 @@
+# NetSynth VPN Server Configuration
+# Usage: sudo cargo run --example vpn-server -- --config configs/vpn-server.toml
+
+# UDP port to listen on
+port = 4433
+
+# Pre-shared key — must match all clients
+psk = "change-me-in-production"
+
+# Server's TUN IP address in the VPN subnet (server is always .1)
+tun_addr = "10.8.0.1"
+
+# TUN device name
+tun_name = "tun0"
+
+# External network interface for NAT masquerade
+# Use `ip route show default` to find the right interface
+external_iface = "eth0"

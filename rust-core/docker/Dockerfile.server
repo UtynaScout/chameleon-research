@@ -1,0 +1,24 @@
+FROM rust:1.80-bookworm AS builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+COPY examples/ examples/
+
+# Build the VPN server binary in release mode
+RUN cargo build --release --example vpn-server
+
+# --- Runtime ---
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        iproute2 \
+        iptables \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/examples/vpn-server /usr/local/bin/vpn-server
+COPY configs/vpn-server.toml /etc/vpn-server.toml
+
+ENTRYPOINT ["vpn-server"]
+CMD ["--config", "/etc/vpn-server.toml"]
