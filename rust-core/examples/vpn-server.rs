@@ -52,6 +52,12 @@ struct Args {
     /// External network interface for NAT masquerade.
     #[arg(long, default_value = "eth0")]
     external_iface: String,
+
+    /// Additional TLS certificate SANs (IP addresses or hostnames).
+    /// The server's public IP should be listed here so clients can connect by IP.
+    /// "localhost" and "127.0.0.1" are always included.
+    #[arg(long)]
+    san: Vec<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -61,6 +67,7 @@ struct FileConfig {
     tun_addr: Option<String>,
     tun_name: Option<String>,
     external_iface: Option<String>,
+    san: Option<Vec<String>>,
 }
 
 struct Settings {
@@ -69,6 +76,7 @@ struct Settings {
     tun_addr: String,
     tun_name: String,
     external_iface: String,
+    san: Vec<String>,
 }
 
 impl Settings {
@@ -82,6 +90,7 @@ impl Settings {
                 tun_addr: fc.tun_addr.unwrap_or(args.tun_addr),
                 tun_name: fc.tun_name.unwrap_or(args.tun_name),
                 external_iface: fc.external_iface.unwrap_or(args.external_iface),
+                san: fc.san.unwrap_or(args.san),
             })
         } else {
             Ok(Self {
@@ -90,6 +99,7 @@ impl Settings {
                 tun_addr: args.tun_addr,
                 tun_name: args.tun_name,
                 external_iface: args.external_iface,
+                san: args.san,
             })
         }
     }
@@ -161,8 +171,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // ---- QUIC server ----
-    let (endpoint, _cert) = QuicTransport::bind_server(addr).await?;
-    info!(addr = %endpoint.local_addr()?, "VPN server listening");
+    // Build cert SANs: always include localhost + 127.0.0.1, plus any extras
+    let mut san_list: Vec<String> = vec!["localhost".into(), "127.0.0.1".into()];
+    for s in &settings.san {
+        if !san_list.contains(s) {
+            san_list.push(s.clone());
+        }
+    }
+    let san_refs: Vec<&str> = san_list.iter().map(|s| s.as_str()).collect();
+    let (endpoint, _cert) = QuicTransport::bind_server_with_san(addr, &san_refs).await?;
+    info!(addr = %endpoint.local_addr()?, san = ?san_list, "VPN server listening");
 
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);

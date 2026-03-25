@@ -56,6 +56,20 @@ impl QuicTransport {
         Ok((endpoint, cert))
     }
 
+    /// Create a server endpoint with custom SANs on the self-signed cert.
+    ///
+    /// Use this when clients connect by IP or a specific hostname.
+    pub async fn bind_server_with_san(
+        addr: SocketAddr,
+        san: &[&str],
+    ) -> Result<(Endpoint, super::handshake::SelfSignedCert), TransportError> {
+        let (server_cfg, cert) = handshake::server_config_with_san(san)
+            .map_err(|e| TransportError::HandshakeFailed(e.to_string()))?;
+        let endpoint = Endpoint::server(server_cfg, addr)
+            .map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
+        Ok((endpoint, cert))
+    }
+
     /// Connect to a QUIC server.
     pub async fn connect(&mut self, addr: SocketAddr, server_name: &str) -> Result<(), TransportError> {
         let ep = self

@@ -4,6 +4,11 @@
 # VPN server address (IP:port)
 server = "192.168.1.100:4433"
 
+# TLS server name for QUIC handshake.
+# Must match a SAN in the server's TLS certificate.
+# Defaults to the server IP if omitted.
+# server_name = "192.168.1.100"
+
 # Pre-shared key — must match the server
 psk = "change-me-in-production"
 

@@ -16,3 +16,8 @@ tun_name = "tun0"
 # External network interface for NAT masquerade
 # Use `ip route show default` to find the right interface
 external_iface = "eth0"
+
+# Additional TLS certificate SANs (Subject Alternative Names).
+# Add the server's public IP so clients can connect by IP address.
+# "localhost" and "127.0.0.1" are always included automatically.
+san = ["77.110.97.128"]

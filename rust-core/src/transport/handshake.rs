@@ -13,7 +13,15 @@ pub struct SelfSignedCert {
 
 /// Generate a self-signed certificate for `localhost`.
 pub fn generate_self_signed() -> Result<SelfSignedCert, String> {
-    let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    generate_self_signed_with_san(&["localhost", "127.0.0.1"])
+}
+
+/// Generate a self-signed certificate with custom Subject Alternative Names.
+///
+/// Each entry can be a DNS name (`"myhost"`) or an IP address (`"10.0.0.1"`).
+/// `rcgen` auto-detects IP vs DNS from the string format.
+pub fn generate_self_signed_with_san(san: &[&str]) -> Result<SelfSignedCert, String> {
+    let subject_alt_names: Vec<String> = san.iter().map(|s| s.to_string()).collect();
     let cert = generate_simple_self_signed(subject_alt_names)
         .map_err(|e| e.to_string())?;
 
@@ -41,10 +49,19 @@ pub fn client_crypto_config() -> rustls::ClientConfig {
 
 /// Build a `quinn::ServerConfig` from a self-signed cert.
 pub fn server_config() -> Result<(quinn::ServerConfig, SelfSignedCert), String> {
+    server_config_with_san(&["localhost", "127.0.0.1"])
+}
+
+/// Build a `quinn::ServerConfig` with custom SANs on the self-signed cert.
+///
+/// Use this when the server must be reachable by a public IP or hostname.
+pub fn server_config_with_san(
+    san: &[&str],
+) -> Result<(quinn::ServerConfig, SelfSignedCert), String> {
     // Ensure ring crypto provider is installed
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let cert = generate_self_signed()?;
+    let cert = generate_self_signed_with_san(san)?;
 
     let mut tls_config = rustls::ServerConfig::builder()
         .with_no_client_auth()

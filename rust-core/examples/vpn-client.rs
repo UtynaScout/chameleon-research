@@ -35,6 +35,11 @@ struct Args {
     #[arg(short, long, default_value = "127.0.0.1:4433")]
     server: String,
 
+    /// TLS server name for QUIC handshake (must match server cert SAN).
+    /// Defaults to the server IP address.
+    #[arg(long)]
+    server_name: Option<String>,
+
     /// Pre-shared key (must match server).
     #[arg(long, default_value = "vpn-psk")]
     psk: String,
@@ -51,6 +56,7 @@ struct Args {
 #[derive(serde::Deserialize, Default)]
 struct FileConfig {
     server: Option<String>,
+    server_name: Option<String>,
     psk: Option<String>,
     tun_addr: Option<String>,
     tun_name: Option<String>,
@@ -58,6 +64,7 @@ struct FileConfig {
 
 struct Settings {
     server: String,
+    server_name: Option<String>,
     psk: String,
     tun_addr: String,
     tun_name: String,
@@ -70,6 +77,7 @@ impl Settings {
             let fc: FileConfig = toml::from_str(&content)?;
             Ok(Self {
                 server: fc.server.unwrap_or(args.server),
+                server_name: fc.server_name.or(args.server_name),
                 psk: fc.psk.unwrap_or(args.psk),
                 tun_addr: fc.tun_addr.unwrap_or(args.tun_addr),
                 tun_name: fc.tun_name.unwrap_or(args.tun_name),
@@ -77,6 +85,7 @@ impl Settings {
         } else {
             Ok(Self {
                 server: args.server,
+                server_name: args.server_name,
                 psk: args.psk,
                 tun_addr: args.tun_addr,
                 tun_name: args.tun_name,
@@ -112,9 +121,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(dev = tun.name(), addr = %tun_addr, "TUN device ready");
 
     // ---- QUIC connection ----
+    // server_name must match a SAN in the server's TLS certificate.
+    // Defaults to the server IP so self-signed certs with IP SANs work.
+    let server_name = settings
+        .server_name
+        .unwrap_or_else(|| server_addr.ip().to_string());
     let mut transport = QuicTransport::new(TransportConfig::default());
     transport.bind_client().await?;
-    transport.connect(server_addr, "localhost").await?;
+    info!(server = %server_addr, sni = %server_name, "Connecting...");
+    transport.connect(server_addr, &server_name).await?;
     let conn = transport
         .connection()
         .expect("connected")
