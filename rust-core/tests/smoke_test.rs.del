@@ -1,0 +1,50 @@
+use chameleon_core::crypto::derive_session_key;
+use chameleon_core::transport::quic::QuicTransport;
+use chameleon_core::transport::TransportConfig;
+use chameleon_core::tun::VpnTunnel;
+use std::net::SocketAddr;
+
+async fn setup_server() -> (quinn::Endpoint, SocketAddr) {
+    let (ep, _cert) = QuicTransport::bind_server("127.0.0.1:0".parse().unwrap())
+        .await
+        .expect("bind_server");
+    let addr = ep.local_addr().unwrap();
+    (ep, addr)
+}
+
+async fn connect_client(addr: SocketAddr) -> quinn::Connection {
+    let mut t = QuicTransport::new(TransportConfig::default());
+    t.bind_client().await.unwrap();
+    t.connect(addr, "localhost").await.unwrap();
+    t.connection().unwrap().clone()
+}
+
+#[tokio::test]
+async fn basic_tunnel() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let key = derive_session_key(b"test", b"s", b"i");
+
+    let (ep, addr) = setup_server().await;
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let k = key;
+    let server = tokio::spawn(async move {
+        let incoming = ep.accept().await.unwrap();
+        let conn = incoming.await.unwrap();
+        let tunnel = VpnTunnel::server(&conn, k).await.unwrap();
+        let (mut tx, mut rx) = tunnel.split();
+        let pkt = rx.recv_packet().await.unwrap();
+        assert_eq!(pkt, b"hi");
+        tx.send_packet(b"ok").await.unwrap();
+        let _ = done_rx.await;
+    });
+
+    let conn = connect_client(addr).await;
+    let tunnel = VpnTunnel::client(&conn, key).await.unwrap();
+    let (mut tx, mut rx) = tunnel.split();
+    tx.send_packet(b"hi").await.unwrap();
+    let reply = rx.recv_packet().await.unwrap();
+    assert_eq!(reply, b"ok");
+    let _ = done_tx.send(());
+    server.await.unwrap();
+}

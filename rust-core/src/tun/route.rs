@@ -56,17 +56,18 @@ impl RouteManager {
     }
 
     /// Add iptables FORWARD rules to allow traffic between TUN and external interfaces.
+    /// Uses `-I FORWARD 1` to insert before Docker/other rules that may DROP traffic.
     pub fn add_forward_rules(tun_name: &str, external_iface: &str) -> Result<(), TunError> {
-        // Allow forwarding from TUN to external interface
+        // Allow forwarding from TUN to external interface (insert at top)
         run_cmd(
             "iptables",
-            &["-A", "FORWARD", "-i", tun_name, "-o", external_iface, "-j", "ACCEPT"],
+            &["-I", "FORWARD", "1", "-i", tun_name, "-o", external_iface, "-j", "ACCEPT"],
         )?;
-        // Allow established/related return traffic
+        // Allow established/related return traffic (insert at position 2, after the above)
         run_cmd(
             "iptables",
             &[
-                "-A", "FORWARD", "-i", external_iface, "-o", tun_name,
+                "-I", "FORWARD", "2", "-i", external_iface, "-o", tun_name,
                 "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT",
             ],
         )?;
