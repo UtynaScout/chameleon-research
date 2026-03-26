@@ -298,25 +298,27 @@ async fn handle_client(
         loop {
             match tunnel_rx.recv_packet().await {
                 Ok(pkt) => {
-                    // Only process valid IPv4 packets
-                    if pkt.len() >= 20 && (pkt[0] >> 4) == 4 {
-                        let src = Ipv4Addr::new(pkt[12], pkt[13], pkt[14], pkt[15]);
-                        // Only learn IPs in the VPN subnet (10.8.0.0/24)
-                        // Skip unspecified, broadcast, and non-VPN addresses
-                        if src.octets()[0] == 10
-                            && src.octets()[1] == 8
-                            && src.octets()[2] == 0
-                            && src.octets()[3] != 0
-                            && src.octets()[3] != 255
-                        {
-                            let mut map = routes_learn.write().await;
-                            if !map.contains_key(&src) {
-                                info!(%src, "Learned client IP");
-                                map.insert(src, client_tx_learn.clone());
-                                learned_t1.write().await.push(src);
-                            }
+                    // Drop non-IPv4 packets (TUN is IPv4-only)
+                    if pkt.len() < 20 || (pkt[0] >> 4) != 4 {
+                        continue;
+                    }
+
+                    let src = Ipv4Addr::new(pkt[12], pkt[13], pkt[14], pkt[15]);
+                    // Learn IPs in the VPN subnet (10.8.0.0/24)
+                    if src.octets()[0] == 10
+                        && src.octets()[1] == 8
+                        && src.octets()[2] == 0
+                        && src.octets()[3] != 0
+                        && src.octets()[3] != 255
+                    {
+                        let mut map = routes_learn.write().await;
+                        if !map.contains_key(&src) {
+                            info!(%src, "Learned client IP");
+                            map.insert(src, client_tx_learn.clone());
+                            learned_t1.write().await.push(src);
                         }
                     }
+
                     if to_tun.send(pkt).await.is_err() {
                         break;
                     }
