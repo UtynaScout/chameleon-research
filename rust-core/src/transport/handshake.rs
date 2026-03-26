@@ -5,6 +5,8 @@ use std::sync::Arc;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
+use super::dpi::DpiProfile;
+
 /// A self-signed certificate bundle for testing.
 pub struct SelfSignedCert {
     pub cert_der: CertificateDer<'static>,
@@ -45,6 +47,24 @@ pub fn client_crypto_config() -> rustls::ClientConfig {
         .with_no_client_auth();
     cfg.alpn_protocols = vec![b"h3".to_vec()];
     cfg
+}
+
+/// Build a `rustls::ClientConfig` with DPI-resistance features.
+///
+/// Applies the fingerprint preset (cipher suite ordering), custom ALPN,
+/// and any other TLS-level configuration from the [`DpiProfile`].
+pub fn client_crypto_config_with_dpi(dpi: &DpiProfile) -> Result<rustls::ClientConfig, String> {
+    let provider = dpi.fingerprint.crypto_provider();
+
+    let mut cfg = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(InsecureServerVerifier))
+        .with_no_client_auth();
+
+    cfg.alpn_protocols = dpi.alpn.iter().map(|a| a.as_bytes().to_vec()).collect();
+    Ok(cfg)
 }
 
 /// Build a `quinn::ServerConfig` from a self-signed cert.

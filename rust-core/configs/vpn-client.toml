@@ -18,3 +18,35 @@ tun_addr = "10.8.0.2"
 
 # TUN device name
 tun_name = "tun0"
+
+# ---------------------------------------------------------------------------
+# DPI Resistance (Phase 6)
+# These settings control TLS fingerprint, SNI, padding, and traffic shaping
+# for research into DPI detection methods.
+# ---------------------------------------------------------------------------
+
+# SNI to inject into the TLS Client Hello.
+# If set, this domain appears in the SNI extension instead of the server IP.
+# Default: uses server_name (or server IP).
+# tls_sni = "www.google.com"
+
+# ALPN protocol to advertise. Default: "h3" (HTTP/3).
+# tls_alpn = "h3"
+
+# TLS fingerprint preset: "rustls_default", "chrome_130", "firefox_120"
+# Controls cipher suite ordering in Client Hello (affects JA3 fingerprint).
+# tls_fingerprint = "chrome_130"
+
+# Traffic shaping profile: "none", "browsing", "streaming"
+# Adds timing delays between packets to mimic real application patterns.
+# shaping = "browsing"
+
+# Packet padding configuration.
+# Both client and server must agree on padding settings.
+# [padding]
+# enabled = true
+# mode = "mss"            # "mss", "fixed", "random", or "none"
+# mss_values = [1200, 1350, 1500]   # target sizes for "mss" mode
+# fixed_size = 1200                 # target size for "fixed" mode
+# min_size = 256                    # minimum for "random" mode
+# max_size = 1350                   # maximum for "random" mode

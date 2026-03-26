@@ -10,6 +10,7 @@
 pub mod route;
 
 use crate::crypto::cipher;
+use crate::transport::dpi::PaddingConfig;
 
 // ---------------------------------------------------------------------------
 // Error
@@ -268,6 +269,7 @@ pub struct VpnTunnelSender {
     key: [u8; 32],
     counter: u64,
     direction: u8,
+    padding: Option<PaddingConfig>,
 }
 
 /// Receiving half of a [`VpnTunnel`].
@@ -276,6 +278,7 @@ pub struct VpnTunnelReceiver {
     key: [u8; 32],
     counter: u64,
     direction: u8,
+    padding_enabled: bool,
 }
 
 impl VpnTunnel {
@@ -293,12 +296,14 @@ impl VpnTunnel {
                 key,
                 counter: 0,
                 direction: 0,
+                padding: None,
             },
             receiver: VpnTunnelReceiver {
                 recv,
                 key,
                 counter: 0,
                 direction: 0,
+                padding_enabled: false,
             },
         })
     }
@@ -317,14 +322,23 @@ impl VpnTunnel {
                 key,
                 counter: 0,
                 direction: 1,
+                padding: None,
             },
             receiver: VpnTunnelReceiver {
                 recv,
                 key,
                 counter: 0,
                 direction: 1,
+                padding_enabled: false,
             },
         })
+    }
+
+    /// Enable packet padding on both sender and receiver.
+    pub fn set_padding(&mut self, config: PaddingConfig) {
+        let enabled = config.enabled;
+        self.sender.padding = Some(config);
+        self.receiver.padding_enabled = enabled;
     }
 
     /// Split into independent sender and receiver for concurrent use.
@@ -342,12 +356,25 @@ fn make_nonce(direction: u8, counter: u64) -> [u8; 12] {
 
 impl VpnTunnelSender {
     /// Encrypt and send a packet over the tunnel.
+    ///
+    /// If padding is enabled, the plaintext becomes
+    /// `[2B original_len][data][random_padding]` before encryption.
     pub async fn send_packet(&mut self, packet: &[u8]) -> Result<(), TunError> {
         let nonce = make_nonce(self.direction, self.counter);
         self.counter += 1;
 
+        let plaintext = if let Some(ref padding) = self.padding {
+            if padding.enabled {
+                padding.pad_packet(packet)
+            } else {
+                packet.to_vec()
+            }
+        } else {
+            packet.to_vec()
+        };
+
         let encrypted =
-            cipher::encrypt(packet, &self.key, &nonce, b"vpn").map_err(|_| TunError::Encryption)?;
+            cipher::encrypt(&plaintext, &self.key, &nonce, b"vpn").map_err(|_| TunError::Encryption)?;
 
         let len = (encrypted.len() as u16).to_be_bytes();
         self.send
@@ -361,29 +388,54 @@ impl VpnTunnelSender {
 
         Ok(())
     }
+
+    /// Enable or update padding configuration.
+    pub fn set_padding(&mut self, config: PaddingConfig) {
+        self.padding = Some(config);
+    }
 }
 
 impl VpnTunnelReceiver {
     /// Receive and decrypt the next packet from the tunnel.
+    ///
+    /// If padding is enabled, strips the `[2B len][data][padding]` envelope.
+    /// Dummy/keepalive packets (original_len == 0) are silently skipped.
     pub async fn recv_packet(&mut self) -> Result<Vec<u8>, TunError> {
-        let mut len_buf = [0u8; 2];
-        self.recv
-            .read_exact(&mut len_buf)
-            .await
-            .map_err(|e| TunError::Transport(e.to_string()))?;
-        let len = u16::from_be_bytes(len_buf) as usize;
+        loop {
+            let mut len_buf = [0u8; 2];
+            self.recv
+                .read_exact(&mut len_buf)
+                .await
+                .map_err(|e| TunError::Transport(e.to_string()))?;
+            let len = u16::from_be_bytes(len_buf) as usize;
 
-        let mut encrypted = vec![0u8; len];
-        self.recv
-            .read_exact(&mut encrypted)
-            .await
-            .map_err(|e| TunError::Transport(e.to_string()))?;
+            let mut encrypted = vec![0u8; len];
+            self.recv
+                .read_exact(&mut encrypted)
+                .await
+                .map_err(|e| TunError::Transport(e.to_string()))?;
 
-        // Peer sends with the opposite direction byte
-        let peer_direction = 1 - self.direction;
-        let nonce = make_nonce(peer_direction, self.counter);
-        self.counter += 1;
+            // Peer sends with the opposite direction byte
+            let peer_direction = 1 - self.direction;
+            let nonce = make_nonce(peer_direction, self.counter);
+            self.counter += 1;
 
-        cipher::decrypt(&encrypted, &self.key, &nonce, b"vpn").map_err(|_| TunError::Decryption)
+            let decrypted =
+                cipher::decrypt(&encrypted, &self.key, &nonce, b"vpn").map_err(|_| TunError::Decryption)?;
+
+            if self.padding_enabled {
+                match PaddingConfig::unpad_packet(&decrypted) {
+                    Some(data) => return Ok(data),
+                    None => continue, // Dummy packet — skip and read next
+                }
+            } else {
+                return Ok(decrypted);
+            }
+        }
+    }
+
+    /// Enable or disable padding-aware receiving.
+    pub fn set_padding_enabled(&mut self, enabled: bool) {
+        self.padding_enabled = enabled;
     }
 }

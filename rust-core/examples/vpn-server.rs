@@ -14,6 +14,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use chameleon_core::crypto::derive_session_key;
+use chameleon_core::transport::dpi::{PaddingConfig, PaddingMode};
 use chameleon_core::transport::quic::QuicTransport;
 use chameleon_core::tun::route::RouteManager;
 use chameleon_core::tun::{TunDevice, VpnTunnel};
@@ -68,6 +69,17 @@ struct FileConfig {
     tun_name: Option<String>,
     external_iface: Option<String>,
     san: Option<Vec<String>>,
+    padding: Option<PaddingFileConfig>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct PaddingFileConfig {
+    enabled: Option<bool>,
+    mode: Option<String>,
+    mss_values: Option<Vec<usize>>,
+    fixed_size: Option<usize>,
+    min_size: Option<usize>,
+    max_size: Option<usize>,
 }
 
 struct Settings {
@@ -77,6 +89,7 @@ struct Settings {
     tun_name: String,
     external_iface: String,
     san: Vec<String>,
+    padding: PaddingConfig,
 }
 
 impl Settings {
@@ -84,6 +97,9 @@ impl Settings {
         if let Some(path) = &args.config {
             let content = std::fs::read_to_string(path)?;
             let fc: FileConfig = toml::from_str(&content)?;
+
+            let padding = Self::build_padding(&fc);
+
             Ok(Self {
                 port: fc.port.unwrap_or(args.port),
                 psk: fc.psk.unwrap_or(args.psk),
@@ -91,6 +107,7 @@ impl Settings {
                 tun_name: fc.tun_name.unwrap_or(args.tun_name),
                 external_iface: fc.external_iface.unwrap_or(args.external_iface),
                 san: fc.san.unwrap_or(args.san),
+                padding,
             })
         } else {
             Ok(Self {
@@ -100,7 +117,30 @@ impl Settings {
                 tun_name: args.tun_name,
                 external_iface: args.external_iface,
                 san: args.san,
+                padding: PaddingConfig::default(),
             })
+        }
+    }
+
+    fn build_padding(fc: &FileConfig) -> PaddingConfig {
+        if let Some(ref pcfg) = fc.padding {
+            let mode = match pcfg.mode.as_deref() {
+                Some("mss") => {
+                    PaddingMode::Mss(pcfg.mss_values.clone().unwrap_or_else(|| vec![1200, 1350, 1500]))
+                }
+                Some("fixed") => PaddingMode::Fixed(pcfg.fixed_size.unwrap_or(1200)),
+                Some("random") => PaddingMode::Random {
+                    min_size: pcfg.min_size.unwrap_or(256),
+                    max_size: pcfg.max_size.unwrap_or(1350),
+                },
+                _ => PaddingMode::None,
+            };
+            PaddingConfig {
+                enabled: pcfg.enabled.unwrap_or(false),
+                mode,
+            }
+        } else {
+            PaddingConfig::default()
         }
     }
 }
@@ -186,6 +226,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
 
+    let padding = settings.padding.clone();
+    if padding.enabled {
+        info!(mode = ?padding.mode, "Packet padding enabled on server");
+    }
+
     loop {
         tokio::select! {
             incoming = endpoint.accept() => {
@@ -193,12 +238,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let key = key;
                 let routes = Arc::clone(&routes);
                 let to_tun = to_tun_tx.clone();
+                let pad = padding.clone();
                 tokio::spawn(async move {
                     match incoming.await {
                         Ok(conn) => {
                             let remote = conn.remote_address();
                             info!(%remote, "Client connected");
-                            if let Err(e) = handle_client(conn, key, routes, to_tun).await {
+                            if let Err(e) = handle_client(conn, key, routes, to_tun, pad).await {
                                 warn!(%remote, "Session ended: {e}");
                             }
                         }
@@ -228,8 +274,15 @@ async fn handle_client(
     key: [u8; 32],
     routes: ClientRoutes,
     to_tun: mpsc::Sender<Vec<u8>>,
+    padding: PaddingConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let tunnel = VpnTunnel::server(&conn, key).await?;
+    let mut tunnel = VpnTunnel::server(&conn, key).await?;
+
+    // Apply padding if configured
+    if padding.enabled {
+        tunnel.set_padding(padding);
+    }
+
     let (mut tunnel_tx, mut tunnel_rx) = tunnel.split();
 
     let (client_tx, mut client_rx) = mpsc::channel::<Vec<u8>>(512);

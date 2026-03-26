@@ -2,9 +2,11 @@
 //!
 //! Provides QUIC (primary) and HTTP/2 (fallback) transports.
 
+pub mod dpi;
 pub mod handshake;
 pub mod http2;
 pub mod quic;
+pub mod shaper;
 
 use thiserror::Error;
 
@@ -62,9 +64,11 @@ use std::net::SocketAddr;
 
 use crate::frame::ChameleonFrame;
 
+pub use dpi::{DpiProfile, FingerprintPreset, PaddingConfig, PaddingMode, ShapingProfile};
 pub use handshake::SelfSignedCert;
 pub use http2::{Http2Server, Http2Transport};
 pub use quic::QuicTransport;
+pub use shaper::TrafficShaper;
 
 /// Unified transport that integrates frame encryption with the underlying
 /// QUIC (or HTTP/2) connection.

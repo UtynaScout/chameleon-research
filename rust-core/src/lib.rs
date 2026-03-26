@@ -8,6 +8,7 @@ pub use crypto::{CryptoError, decrypt, derive_session_key, encrypt, rotate_key};
 pub use frame::model::{FrameType, TrafficFrame};
 pub use frame::ChameleonFrame;
 pub use transport::{Transport, TransportConfig, TransportError, TransportMode};
+pub use transport::{DpiProfile, FingerprintPreset, PaddingConfig, PaddingMode, ShapingProfile, TrafficShaper};
 pub use tun::{TunDevice, TunError, VpnTunnel, VpnTunnelReceiver, VpnTunnelSender};
 pub use weaver::{
     GeneratedPacket, SessionStats, ValidationError, WeaverEngine, WeaverProfile, WeaverState,

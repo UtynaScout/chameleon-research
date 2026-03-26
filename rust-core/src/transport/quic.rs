@@ -6,6 +6,7 @@ use std::sync::Arc;
 use quinn::{ClientConfig, Endpoint};
 
 use super::{TransportConfig, TransportError};
+use crate::transport::dpi::DpiProfile;
 use crate::transport::handshake;
 
 /// QUIC transport backed by a `quinn::Endpoint`.
@@ -29,6 +30,32 @@ impl QuicTransport {
     /// Applies `config.mtu` as the QUIC initial MTU.
     pub async fn bind_client(&mut self) -> Result<(), TransportError> {
         let crypto = handshake::client_crypto_config();
+        let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+            .map_err(|e| TransportError::HandshakeFailed(e.to_string()))?;
+
+        let mut transport_cfg = quinn::TransportConfig::default();
+        transport_cfg.initial_mtu(self.config.mtu as u16);
+
+        let mut client_cfg = ClientConfig::new(Arc::new(quic_crypto));
+        client_cfg.transport_config(Arc::new(transport_cfg));
+
+        let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
+            .map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
+        endpoint.set_default_client_config(client_cfg);
+        self.endpoint = Some(endpoint);
+        Ok(())
+    }
+
+    /// Bind a client endpoint with DPI-resistance features.
+    ///
+    /// Applies the fingerprint preset (cipher suite ordering), custom ALPN,
+    /// and other TLS-level settings from the [`DpiProfile`].
+    pub async fn bind_client_with_dpi(
+        &mut self,
+        dpi: &DpiProfile,
+    ) -> Result<(), TransportError> {
+        let crypto = handshake::client_crypto_config_with_dpi(dpi)
+            .map_err(|e| TransportError::HandshakeFailed(e.to_string()))?;
         let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
             .map_err(|e| TransportError::HandshakeFailed(e.to_string()))?;
 

@@ -21,3 +21,15 @@ external_iface = "ens3"
 # Add the server's public IP so clients can connect by IP address.
 # "localhost" and "127.0.0.1" are always included automatically.
 san = ["77.110.97.128"]
+
+# ---------------------------------------------------------------------------
+# Packet Padding (Phase 6)
+# Must match client padding settings for compatibility.
+# ---------------------------------------------------------------------------
+# [padding]
+# enabled = true
+# mode = "mss"            # "mss", "fixed", "random", or "none"
+# mss_values = [1200, 1350, 1500]
+# fixed_size = 1200
+# min_size = 256
+# max_size = 1350

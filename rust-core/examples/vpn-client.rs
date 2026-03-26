@@ -12,7 +12,9 @@
 use std::net::{Ipv4Addr, SocketAddr};
 
 use chameleon_core::crypto::derive_session_key;
+use chameleon_core::transport::dpi::{DpiProfile, FingerprintPreset, PaddingConfig, PaddingMode, ShapingProfile};
 use chameleon_core::transport::quic::QuicTransport;
+use chameleon_core::transport::shaper::TrafficShaper;
 use chameleon_core::transport::TransportConfig;
 use chameleon_core::tun::route::RouteManager;
 use chameleon_core::tun::{TunDevice, VpnTunnel};
@@ -60,6 +62,24 @@ struct FileConfig {
     psk: Option<String>,
     tun_addr: Option<String>,
     tun_name: Option<String>,
+    // DPI resistance fields
+    tls_sni: Option<String>,
+    tls_alpn: Option<String>,
+    tls_fingerprint: Option<String>,
+    // Padding
+    padding: Option<PaddingFileConfig>,
+    // Traffic shaping
+    shaping: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct PaddingFileConfig {
+    enabled: Option<bool>,
+    mode: Option<String>,
+    mss_values: Option<Vec<usize>>,
+    fixed_size: Option<usize>,
+    min_size: Option<usize>,
+    max_size: Option<usize>,
 }
 
 struct Settings {
@@ -68,6 +88,7 @@ struct Settings {
     psk: String,
     tun_addr: String,
     tun_name: String,
+    dpi: DpiProfile,
 }
 
 impl Settings {
@@ -75,12 +96,17 @@ impl Settings {
         if let Some(path) = &args.config {
             let content = std::fs::read_to_string(path)?;
             let fc: FileConfig = toml::from_str(&content)?;
+
+            // Build DPI profile from TOML fields
+            let dpi = Self::build_dpi_profile(&fc);
+
             Ok(Self {
                 server: fc.server.unwrap_or(args.server),
                 server_name: fc.server_name.or(args.server_name),
                 psk: fc.psk.unwrap_or(args.psk),
                 tun_addr: fc.tun_addr.unwrap_or(args.tun_addr),
                 tun_name: fc.tun_name.unwrap_or(args.tun_name),
+                dpi,
             })
         } else {
             Ok(Self {
@@ -89,7 +115,56 @@ impl Settings {
                 psk: args.psk,
                 tun_addr: args.tun_addr,
                 tun_name: args.tun_name,
+                dpi: DpiProfile::default(),
             })
+        }
+    }
+
+    fn build_dpi_profile(fc: &FileConfig) -> DpiProfile {
+        let sni = fc.tls_sni.clone();
+        let alpn = fc
+            .tls_alpn
+            .as_deref()
+            .map(|a| vec![a.to_string()])
+            .unwrap_or_else(|| vec!["h3".into()]);
+        let fingerprint = fc
+            .tls_fingerprint
+            .as_deref()
+            .and_then(|s| FingerprintPreset::from_str(s).ok())
+            .unwrap_or(FingerprintPreset::RustlsDefault);
+
+        let padding = if let Some(ref pcfg) = fc.padding {
+            let mode = match pcfg.mode.as_deref() {
+                Some("mss") => {
+                    PaddingMode::Mss(pcfg.mss_values.clone().unwrap_or_else(|| vec![1200, 1350, 1500]))
+                }
+                Some("fixed") => PaddingMode::Fixed(pcfg.fixed_size.unwrap_or(1200)),
+                Some("random") => PaddingMode::Random {
+                    min_size: pcfg.min_size.unwrap_or(256),
+                    max_size: pcfg.max_size.unwrap_or(1350),
+                },
+                _ => PaddingMode::None,
+            };
+            PaddingConfig {
+                enabled: pcfg.enabled.unwrap_or(false),
+                mode,
+            }
+        } else {
+            PaddingConfig::default()
+        };
+
+        let shaping = fc
+            .shaping
+            .as_deref()
+            .and_then(|s| ShapingProfile::from_str(s).ok())
+            .unwrap_or(ShapingProfile::None);
+
+        DpiProfile {
+            sni,
+            alpn,
+            fingerprint,
+            padding,
+            shaping,
         }
     }
 }
@@ -123,13 +198,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---- QUIC connection ----
     // server_name must match a SAN in the server's TLS certificate.
     // Defaults to the server IP so self-signed certs with IP SANs work.
-    let server_name = settings
-        .server_name
-        .unwrap_or_else(|| server_addr.ip().to_string());
+    // If tls_sni is configured, it overrides the SNI in Client Hello.
+    let connect_name = settings.dpi.sni.clone().unwrap_or_else(|| {
+        settings
+            .server_name
+            .clone()
+            .unwrap_or_else(|| server_addr.ip().to_string())
+    });
     let mut transport = QuicTransport::new(TransportConfig::default());
-    transport.bind_client().await?;
-    info!(server = %server_addr, sni = %server_name, "Connecting...");
-    transport.connect(server_addr, &server_name).await?;
+
+    // Use DPI-aware binding if fingerprint or ALPN is configured
+    if settings.dpi.fingerprint != FingerprintPreset::RustlsDefault
+        || settings.dpi.alpn != vec!["h3".to_string()]
+        || settings.dpi.sni.is_some()
+    {
+        transport.bind_client_with_dpi(&settings.dpi).await?;
+        info!(
+            fingerprint = settings.dpi.fingerprint.description(),
+            alpn = ?settings.dpi.alpn,
+            "DPI profile applied"
+        );
+    } else {
+        transport.bind_client().await?;
+    }
+
+    info!(server = %server_addr, sni = %connect_name, "Connecting...");
+    transport.connect(server_addr, &connect_name).await?;
     let conn = transport
         .connection()
         .expect("connected")
@@ -144,32 +238,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Default route set through {}", tun.name());
 
     // ---- VPN tunnel ----
-    let tunnel = VpnTunnel::client(&conn, key).await?;
-    let (mut tunnel_tx, mut tunnel_rx) = tunnel.split();
+    let mut tunnel = VpnTunnel::client(&conn, key).await?;
+
+    // Apply padding if configured
+    if settings.dpi.padding.enabled {
+        tunnel.set_padding(settings.dpi.padding.clone());
+        info!(mode = ?settings.dpi.padding.mode, "Packet padding enabled");
+    }
+
+    let (tunnel_tx, mut tunnel_rx) = tunnel.split();
 
     let tun_r = tun.clone();
     let tun_w = tun.clone();
 
+    // If traffic shaping is enabled, wrap the sender in a TrafficShaper.
+    // Otherwise, use the raw sender directly.
+    let shaping = settings.dpi.shaping.clone();
+    let use_shaper = shaping != ShapingProfile::None;
+
     // TUN → Tunnel: capture local IPv4 traffic, encrypt, send to server
-    let t1 = tokio::spawn(async move {
-        let mut buf = vec![0u8; 65535];
-        loop {
-            match tun_r.read(&mut buf).await {
-                Ok(n) if n >= 20 && (buf[0] >> 4) == 4 => {
-                    if tunnel_tx.send_packet(&buf[..n]).await.is_err() {
+    let t1 = if use_shaper {
+        let shaper = TrafficShaper::new(tunnel_tx, &shaping, settings.dpi.padding.clone());
+        info!(profile = ?shaping, "Traffic shaping enabled");
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 65535];
+            loop {
+                match tun_r.read(&mut buf).await {
+                    Ok(n) if n >= 20 && (buf[0] >> 4) == 4 => {
+                        if shaper.send(buf[..n].to_vec()).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("TUN read: {e}");
                         break;
                     }
                 }
-                Ok(_) => {
-                    // Skip non-IPv4 packets (IPv6, etc.)
-                }
-                Err(e) => {
-                    warn!("TUN read: {e}");
-                    break;
+            }
+        })
+    } else {
+        let mut tunnel_tx = tunnel_tx;
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 65535];
+            loop {
+                match tun_r.read(&mut buf).await {
+                    Ok(n) if n >= 20 && (buf[0] >> 4) == 4 => {
+                        if tunnel_tx.send_packet(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("TUN read: {e}");
+                        break;
+                    }
                 }
             }
-        }
-    });
+        })
+    };
 
     // Tunnel → TUN: receive from server, decrypt, inject into local stack
     let t2 = tokio::spawn(async move {
