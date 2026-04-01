@@ -1,21 +1,46 @@
 =====================================
-  NetSynth — Validation Commands
+  NetSynth — Deployment & Commands
 =====================================
+
+============================================
+  СПОСОБ 1: Один скрипт (рекомендуется)
+============================================
+
+  Запускай на КЛИЕНТЕ — он сам обновит сервер по SSH:
+
+  cd ~/chameleon-research/rust-core
+  git pull origin main
+  sudo bash scripts/deploy-phase8.sh
+
+
+============================================
+  СПОСОБ 2: Ручной деплой
+============================================
 
 ======= СЕРВЕР (77.110.97.128) =======
 
   cd ~/chameleon-research
   git pull origin main
   cd rust-core
-  cargo build --release --examples
-  sudo ./target/release/examples/vpn-server --config configs/vpn-server.toml
+  cargo build --release --example vpn-server
+  pkill -f vpn-server || true
+  nohup ./target/release/examples/vpn-server --config configs/vpn-server.toml > /tmp/vpn-server.log 2>&1 &
+  # Скопируй fingerprint из лога — нужен для cert_pin на клиенте:
+  grep fingerprint /tmp/vpn-server.log
 
 
 ======= КЛИЕНТ (Ubuntu 22.04) =======
 
   cd ~/chameleon-research/rust-core
   git pull origin main
-  cargo build --release --examples
+  cargo build --release --example vpn-client
+  sudo RUST_LOG=info ./target/release/examples/vpn-client --config configs/vpn-client.toml
+
+
+============================================
+  ВАЛИДАЦИЯ (после подключения VPN)
+============================================
+
   sudo bash scripts/validate-all.sh
 
   >>> Скинь ВЕСЬ вывод <<<
