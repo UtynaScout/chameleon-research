@@ -49,6 +49,7 @@ info "=== ШАГ 1: Сборка на сервере ==="
 
 ssh -o ConnectTimeout=10 ${SERVER_SSH} bash -s <<'SERVER_SCRIPT'
 set -e
+export PATH="$HOME/.cargo/bin:$PATH"
 cd ~/chameleon-research
 
 echo "[server] git stash + pull..."
@@ -117,6 +118,17 @@ echo "[client] git stash + pull..."
 git stash 2>/dev/null || true
 git pull origin main
 git stash pop 2>/dev/null || true
+
+# Найти cargo (sudo не наследует PATH пользователя)
+if ! command -v cargo &>/dev/null; then
+    for CARGO_HOME in /home/*/. /root/.; do
+        CARGO_BIN="$(dirname "$CARGO_HOME")/.cargo/bin"
+        if [ -f "$CARGO_BIN/cargo" ]; then
+            export PATH="$CARGO_BIN:$PATH"
+            break
+        fi
+    done
+fi
 
 echo "[client] cargo build --release..."
 cargo build --release --example vpn-client 2>&1 | tail -3
