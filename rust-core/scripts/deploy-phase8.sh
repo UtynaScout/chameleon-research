@@ -51,8 +51,10 @@ ssh -o ConnectTimeout=10 ${SERVER_SSH} bash -s <<'SERVER_SCRIPT'
 set -e
 cd ~/chameleon-research
 
-echo "[server] git pull..."
+echo "[server] git stash + pull..."
+git stash 2>/dev/null || true
 git pull origin main
+git stash pop 2>/dev/null || true
 
 echo "[server] cargo build --release..."
 cd rust-core
@@ -111,8 +113,10 @@ info "=== ШАГ 3: Сборка на клиенте ==="
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${SCRIPT_DIR}"
 
-echo "[client] git pull..."
+echo "[client] git stash + pull..."
+git stash 2>/dev/null || true
 git pull origin main
+git stash pop 2>/dev/null || true
 
 echo "[client] cargo build --release..."
 cargo build --release --example vpn-client 2>&1 | tail -3
