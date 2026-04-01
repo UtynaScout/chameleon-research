@@ -119,15 +119,12 @@ git stash 2>/dev/null || true
 git pull origin main
 git stash pop 2>/dev/null || true
 
-# Найти cargo (sudo не наследует PATH пользователя)
-if ! command -v cargo &>/dev/null; then
-    for CARGO_HOME in /home/*/. /root/.; do
-        CARGO_BIN="$(dirname "$CARGO_HOME")/.cargo/bin"
-        if [ -f "$CARGO_BIN/cargo" ]; then
-            export PATH="$CARGO_BIN:$PATH"
-            break
-        fi
-    done
+# Под sudo — используем rustup/cargo реального пользователя
+if [ -n "$SUDO_USER" ]; then
+    REAL_HOME=$(eval echo "~$SUDO_USER")
+    export RUSTUP_HOME="$REAL_HOME/.rustup"
+    export CARGO_HOME="$REAL_HOME/.cargo"
+    export PATH="$CARGO_HOME/bin:$PATH"
 fi
 
 echo "[client] cargo build --release..."
