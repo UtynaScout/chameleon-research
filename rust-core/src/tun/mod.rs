@@ -7,6 +7,8 @@
 //! a persistent QUIC bidirectional stream using ChaCha20-Poly1305 with
 //! counter-based nonces.
 
+pub mod dns;
+pub mod keepalive;
 pub mod route;
 
 use crate::crypto::cipher;

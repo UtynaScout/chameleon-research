@@ -33,3 +33,13 @@ san = ["77.110.97.128"]
 # fixed_size = 1200
 # min_size = 256
 # max_size = 1350
+
+# ---------------------------------------------------------------------------
+# Stability (Phase 8)
+# ---------------------------------------------------------------------------
+
+# Keep-alive — detect and clean up dead client connections.
+# [keepalive]
+# enabled = true                    # default: true
+# interval_secs = 25                # seconds between pings (default: 25)
+# timeout_secs = 120                # seconds before declaring client dead

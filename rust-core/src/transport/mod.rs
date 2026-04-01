@@ -6,6 +6,7 @@ pub mod dpi;
 pub mod handshake;
 pub mod http2;
 pub mod quic;
+pub mod reconnect;
 pub mod shaper;
 
 use thiserror::Error;

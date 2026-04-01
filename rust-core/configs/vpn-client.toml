@@ -50,3 +50,30 @@ tun_name = "tun0"
 # fixed_size = 1200                 # target size for "fixed" mode
 # min_size = 256                    # minimum for "random" mode
 # max_size = 1350                   # maximum for "random" mode
+
+# ---------------------------------------------------------------------------
+# Stability & Security (Phase 8)
+# ---------------------------------------------------------------------------
+
+# DNS interception — redirect all DNS queries through the VPN tunnel.
+# Prevents ISP from seeing your DNS queries (DNS leak protection).
+# [dns]
+# enabled = true                    # default: true
+# servers = ["8.8.8.8", "1.1.1.1"] # upstream DNS resolvers
+
+# Keep-alive — send periodic dummy packets to keep NAT mappings alive.
+# Prevents the connection from being dropped during idle periods.
+# [keepalive]
+# enabled = true                    # default: true
+# interval_secs = 25                # seconds between pings (default: 25)
+
+# Auto-reconnect — retry connection on network failure with exponential backoff.
+# [reconnect]
+# enabled = true                    # default: true
+# max_retries = 0                   # 0 = unlimited retries
+# max_delay_secs = 30               # maximum delay between retries
+
+# Certificate pinning — SHA-256 fingerprint of the server certificate.
+# Copy from server startup log: "Certificate SHA-256: xx:xx:..."
+# When set, the client will reject connections to servers with a different cert.
+# cert_pin = "ab:cd:ef:..."

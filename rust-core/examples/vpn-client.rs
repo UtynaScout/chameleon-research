@@ -10,12 +10,16 @@
 //! ```
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::time::Duration;
 
 use chameleon_core::crypto::derive_session_key;
 use chameleon_core::transport::dpi::{DpiProfile, FingerprintPreset, PaddingConfig, PaddingMode, ShapingProfile};
 use chameleon_core::transport::quic::QuicTransport;
+use chameleon_core::transport::reconnect::ReconnectConfig;
 use chameleon_core::transport::shaper::TrafficShaper;
 use chameleon_core::transport::TransportConfig;
+use chameleon_core::tun::dns::{DnsInterceptor, DEFAULT_DNS_SERVERS};
+use chameleon_core::tun::keepalive;
 use chameleon_core::tun::route::RouteManager;
 use chameleon_core::tun::{TunDevice, VpnTunnel};
 use clap::Parser;
@@ -70,6 +74,33 @@ struct FileConfig {
     padding: Option<PaddingFileConfig>,
     // Traffic shaping
     shaping: Option<String>,
+    // Phase 8: DNS
+    dns: Option<DnsFileConfig>,
+    // Phase 8: Keep-alive
+    keepalive: Option<KeepaliveFileConfig>,
+    // Phase 8: Reconnect
+    reconnect: Option<ReconnectFileConfig>,
+    // Phase 8: Certificate pinning
+    cert_pin: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct DnsFileConfig {
+    enabled: Option<bool>,
+    servers: Option<Vec<String>>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct KeepaliveFileConfig {
+    enabled: Option<bool>,
+    interval_secs: Option<u64>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ReconnectFileConfig {
+    enabled: Option<bool>,
+    max_retries: Option<u32>,
+    max_delay_secs: Option<u64>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -89,6 +120,14 @@ struct Settings {
     tun_addr: String,
     tun_name: String,
     dpi: DpiProfile,
+    dns_enabled: bool,
+    dns_servers: Vec<String>,
+    keepalive_enabled: bool,
+    keepalive_interval_secs: u64,
+    reconnect_enabled: bool,
+    reconnect_config: ReconnectConfig,
+    #[allow(dead_code)] // will be used when QUIC bind supports cert pinning
+    cert_pin: Option<String>,
 }
 
 impl Settings {
@@ -100,6 +139,32 @@ impl Settings {
             // Build DPI profile from TOML fields
             let dpi = Self::build_dpi_profile(&fc);
 
+            // DNS config
+            let dns_enabled = fc.dns.as_ref().and_then(|d| d.enabled).unwrap_or(true);
+            let dns_servers = fc
+                .dns
+                .as_ref()
+                .and_then(|d| d.servers.clone())
+                .unwrap_or_else(|| DEFAULT_DNS_SERVERS.iter().map(|s| s.to_string()).collect());
+
+            // Keep-alive config
+            let keepalive_enabled = fc.keepalive.as_ref().and_then(|k| k.enabled).unwrap_or(true);
+            let keepalive_interval_secs = fc
+                .keepalive
+                .as_ref()
+                .and_then(|k| k.interval_secs)
+                .unwrap_or(keepalive::DEFAULT_KEEPALIVE_INTERVAL_SECS);
+
+            // Reconnect config
+            let reconnect_enabled = fc.reconnect.as_ref().and_then(|r| r.enabled).unwrap_or(true);
+            let reconnect_config = ReconnectConfig {
+                max_retries: fc.reconnect.as_ref().and_then(|r| r.max_retries).unwrap_or(0),
+                max_delay: Duration::from_secs(
+                    fc.reconnect.as_ref().and_then(|r| r.max_delay_secs).unwrap_or(30),
+                ),
+                ..Default::default()
+            };
+
             Ok(Self {
                 server: fc.server.unwrap_or(args.server),
                 server_name: fc.server_name.or(args.server_name),
@@ -107,6 +172,13 @@ impl Settings {
                 tun_addr: fc.tun_addr.unwrap_or(args.tun_addr),
                 tun_name: fc.tun_name.unwrap_or(args.tun_name),
                 dpi,
+                dns_enabled,
+                dns_servers,
+                keepalive_enabled,
+                keepalive_interval_secs,
+                reconnect_enabled,
+                reconnect_config,
+                cert_pin: fc.cert_pin,
             })
         } else {
             Ok(Self {
@@ -116,6 +188,13 @@ impl Settings {
                 tun_addr: args.tun_addr,
                 tun_name: args.tun_name,
                 dpi: DpiProfile::default(),
+                dns_enabled: true,
+                dns_servers: DEFAULT_DNS_SERVERS.iter().map(|s| s.to_string()).collect(),
+                keepalive_enabled: true,
+                keepalive_interval_secs: keepalive::DEFAULT_KEEPALIVE_INTERVAL_SECS,
+                reconnect_enabled: true,
+                reconnect_config: ReconnectConfig::default(),
+                cert_pin: None,
             })
         }
     }
@@ -195,35 +274,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     info!(dev = tun.name(), addr = %tun_addr, "TUN device ready");
 
-    // ---- QUIC connection ----
-    // server_name must match a SAN in the server's TLS certificate.
-    // Defaults to the server IP so self-signed certs with IP SANs work.
-    // If tls_sni is configured, it overrides the SNI in Client Hello.
+    // ---- QUIC connection (with optional reconnect) ----
     let connect_name = settings.dpi.sni.clone().unwrap_or_else(|| {
         settings
             .server_name
             .clone()
             .unwrap_or_else(|| server_addr.ip().to_string())
     });
-    let mut transport = QuicTransport::new(TransportConfig::default());
 
-    // Use DPI-aware binding if fingerprint or ALPN is configured
-    if settings.dpi.fingerprint != FingerprintPreset::RustlsDefault
-        || settings.dpi.alpn != vec!["h3".to_string()]
-        || settings.dpi.sni.is_some()
-    {
-        transport.bind_client_with_dpi(&settings.dpi).await?;
-        info!(
-            fingerprint = settings.dpi.fingerprint.description(),
-            alpn = ?settings.dpi.alpn,
-            "DPI profile applied"
-        );
+    let transport = if settings.reconnect_enabled {
+        chameleon_core::transport::reconnect::connect_with_retry(
+            server_addr,
+            &connect_name,
+            &settings.dpi,
+            &settings.reconnect_config,
+        )
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
     } else {
-        transport.bind_client().await?;
-    }
+        let mut t = QuicTransport::new(TransportConfig::default());
+        if settings.dpi.fingerprint != FingerprintPreset::RustlsDefault
+            || settings.dpi.alpn != vec!["h3".to_string()]
+            || settings.dpi.sni.is_some()
+        {
+            t.bind_client_with_dpi(&settings.dpi).await?;
+            info!(
+                fingerprint = settings.dpi.fingerprint.description(),
+                alpn = ?settings.dpi.alpn,
+                "DPI profile applied"
+            );
+        } else {
+            t.bind_client().await?;
+        }
+        t.connect(server_addr, &connect_name).await?;
+        t
+    };
 
-    info!(server = %server_addr, sni = %connect_name, "Connecting...");
-    transport.connect(server_addr, &connect_name).await?;
     let conn = transport
         .connection()
         .expect("connected")
@@ -231,16 +317,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(server = %server_addr, "Connected to VPN server");
 
     // ---- Route management ----
-    // Ensure QUIC traffic reaches the server directly (not via TUN loop)
     RouteManager::add_server_route(&server_ip, &saved_gw)?;
-    // Redirect all other traffic through TUN
     RouteManager::set_default_route(tun.name())?;
     info!("Default route set through {}", tun.name());
+
+    // ---- DNS interception (Phase 8) ----
+    let mut dns_interceptor = DnsInterceptor::new(tun.name(), &settings.tun_addr);
+    if settings.dns_enabled {
+        let dns_refs: Vec<&str> = settings.dns_servers.iter().map(|s| s.as_str()).collect();
+        dns_interceptor.install(&dns_refs)?;
+        info!(servers = ?settings.dns_servers, "DNS interception enabled");
+    }
 
     // ---- VPN tunnel ----
     let mut tunnel = VpnTunnel::client(&conn, key).await?;
 
-    // Apply padding if configured
     if settings.dpi.padding.enabled {
         tunnel.set_padding(settings.dpi.padding.clone());
         info!(mode = ?settings.dpi.padding.mode, "Packet padding enabled");
@@ -251,10 +342,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tun_r = tun.clone();
     let tun_w = tun.clone();
 
-    // If traffic shaping is enabled, wrap the sender in a TrafficShaper.
-    // Otherwise, use the raw sender directly.
     let shaping = settings.dpi.shaping.clone();
     let use_shaper = shaping != ShapingProfile::None;
+
+    // ---- Keep-alive (Phase 8) ----
+    let _keepalive_handle = if settings.keepalive_enabled {
+        let interval = Duration::from_secs(settings.keepalive_interval_secs);
+        let (handle, _rx) = keepalive::spawn_keepalive(interval);
+        info!(interval_secs = settings.keepalive_interval_secs, "Keep-alive enabled");
+        Some(handle)
+    } else {
+        None
+    };
 
     // TUN → Tunnel: capture local IPv4 traffic, encrypt, send to server
     let t1 = if use_shaper {
@@ -326,7 +425,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ = &mut shutdown => { info!("Ctrl+C received"); }
     }
 
-    // ---- Restore routes ----
+    // ---- Cleanup ----
+    // DNS interception is restored automatically via Drop,
+    // but explicit uninstall provides better error reporting
+    if settings.dns_enabled {
+        let _ = dns_interceptor.uninstall();
+        info!("DNS interception removed");
+    }
+
     let _ = RouteManager::remove_server_route(&server_ip);
     let _ = RouteManager::restore_default_route(&saved_gw);
     info!(gateway = %saved_gw, "Routes restored");

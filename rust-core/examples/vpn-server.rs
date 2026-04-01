@@ -12,10 +12,11 @@
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-
 use chameleon_core::crypto::derive_session_key;
 use chameleon_core::transport::dpi::{PaddingConfig, PaddingMode};
+use chameleon_core::transport::handshake;
 use chameleon_core::transport::quic::QuicTransport;
+use chameleon_core::tun::keepalive;
 use chameleon_core::tun::route::RouteManager;
 use chameleon_core::tun::{TunDevice, VpnTunnel};
 use clap::Parser;
@@ -70,6 +71,7 @@ struct FileConfig {
     external_iface: Option<String>,
     san: Option<Vec<String>>,
     padding: Option<PaddingFileConfig>,
+    keepalive: Option<KeepaliveFileConfig>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -82,6 +84,13 @@ struct PaddingFileConfig {
     max_size: Option<usize>,
 }
 
+#[derive(serde::Deserialize, Default)]
+struct KeepaliveFileConfig {
+    enabled: Option<bool>,
+    interval_secs: Option<u64>,
+    timeout_secs: Option<u64>,
+}
+
 struct Settings {
     port: u16,
     psk: String,
@@ -90,6 +99,10 @@ struct Settings {
     external_iface: String,
     san: Vec<String>,
     padding: PaddingConfig,
+    keepalive_enabled: bool,
+    keepalive_interval_secs: u64,
+    #[allow(dead_code)]
+    keepalive_timeout_secs: u64,
 }
 
 impl Settings {
@@ -100,6 +113,18 @@ impl Settings {
 
             let padding = Self::build_padding(&fc);
 
+            let keepalive_enabled = fc.keepalive.as_ref().and_then(|k| k.enabled).unwrap_or(true);
+            let keepalive_interval_secs = fc
+                .keepalive
+                .as_ref()
+                .and_then(|k| k.interval_secs)
+                .unwrap_or(keepalive::DEFAULT_KEEPALIVE_INTERVAL_SECS);
+            let keepalive_timeout_secs = fc
+                .keepalive
+                .as_ref()
+                .and_then(|k| k.timeout_secs)
+                .unwrap_or(120);
+
             Ok(Self {
                 port: fc.port.unwrap_or(args.port),
                 psk: fc.psk.unwrap_or(args.psk),
@@ -108,6 +133,9 @@ impl Settings {
                 external_iface: fc.external_iface.unwrap_or(args.external_iface),
                 san: fc.san.unwrap_or(args.san),
                 padding,
+                keepalive_enabled,
+                keepalive_interval_secs,
+                keepalive_timeout_secs,
             })
         } else {
             Ok(Self {
@@ -118,6 +146,9 @@ impl Settings {
                 external_iface: args.external_iface,
                 san: args.san,
                 padding: PaddingConfig::default(),
+                keepalive_enabled: true,
+                keepalive_interval_secs: keepalive::DEFAULT_KEEPALIVE_INTERVAL_SECS,
+                keepalive_timeout_secs: 120,
             })
         }
     }
@@ -220,8 +251,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let san_refs: Vec<&str> = san_list.iter().map(|s| s.as_str()).collect();
-    let (endpoint, _cert) = QuicTransport::bind_server_with_san(addr, &san_refs).await?;
+    let (endpoint, cert) = QuicTransport::bind_server_with_san(addr, &san_refs).await?;
+
+    // Print certificate fingerprint for client pinning
+    let fingerprint = handshake::cert_fingerprint(cert.cert_der.as_ref());
     info!(addr = %endpoint.local_addr()?, san = ?san_list, "VPN server listening");
+    info!(fingerprint = %fingerprint, "Certificate SHA-256 (use as cert_pin on client)");
 
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
@@ -229,6 +264,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let padding = settings.padding.clone();
     if padding.enabled {
         info!(mode = ?padding.mode, "Packet padding enabled on server");
+    }
+    let keepalive_interval = settings.keepalive_interval_secs;
+    let keepalive_enabled = settings.keepalive_enabled;
+    if keepalive_enabled {
+        info!(interval_secs = keepalive_interval, "Keep-alive enabled on server");
     }
 
     loop {

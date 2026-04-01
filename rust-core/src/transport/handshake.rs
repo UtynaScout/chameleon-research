@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use sha2::{Digest, Sha256};
 
 use super::dpi::DpiProfile;
 
@@ -163,4 +164,109 @@ impl rustls::client::danger::ServerCertVerifier for InsecureServerVerifier {
             .signature_verification_algorithms
             .supported_schemes()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Certificate pinning verifier — production use
+// ---------------------------------------------------------------------------
+
+/// Compute the SHA-256 fingerprint of a DER-encoded certificate.
+pub fn cert_fingerprint(cert_der: &[u8]) -> String {
+    let hash = Sha256::digest(cert_der);
+    hash.iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Verifies the server certificate against a pinned SHA-256 fingerprint.
+///
+/// This provides TOFU (Trust On First Use) security: the client stores the
+/// server's certificate fingerprint on first connection, then verifies it
+/// on subsequent connections to detect MITM attacks.
+#[derive(Debug)]
+struct PinnedCertVerifier {
+    /// Expected SHA-256 fingerprint (hex, colon-separated).
+    pin: String,
+}
+
+impl rustls::client::danger::ServerCertVerifier for PinnedCertVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let actual = cert_fingerprint(end_entity.as_ref());
+        if actual == self.pin {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(format!(
+                "Certificate pin mismatch! Expected: {}, Got: {}",
+                self.pin, actual
+            )))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+/// Build a `rustls::ClientConfig` with certificate pinning.
+///
+/// The `pin` must be the SHA-256 fingerprint of the server's DER certificate
+/// in hex format with colons: `"ab:cd:ef:..."`.
+pub fn client_crypto_config_pinned(pin: &str) -> rustls::ClientConfig {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut cfg = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
+            pin: pin.to_string(),
+        }))
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h3".to_vec()];
+    cfg
+}
+
+/// Build a `rustls::ClientConfig` with DPI features **and** certificate pinning.
+pub fn client_crypto_config_with_dpi_pinned(
+    dpi: &DpiProfile,
+    pin: &str,
+) -> Result<rustls::ClientConfig, String> {
+    let provider = dpi.fingerprint.crypto_provider();
+
+    let mut cfg = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
+            pin: pin.to_string(),
+        }))
+        .with_no_client_auth();
+
+    cfg.alpn_protocols = dpi.alpn.iter().map(|a| a.as_bytes().to_vec()).collect();
+    Ok(cfg)
 }
