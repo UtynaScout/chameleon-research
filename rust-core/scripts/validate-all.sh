@@ -12,6 +12,8 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 cd "$DIR"
 mkdir -p captures
+chmod 777 captures
+rm -f captures/handshake.pcap captures/traffic.pcap
 
 echo "=============================================="
 echo "  NetSynth DPI Validation"
@@ -26,9 +28,13 @@ pkill tshark 2>/dev/null || true
 sleep 2
 
 # --- Step 1-3: Capture handshake ---
+HSHAKE_TMP="/tmp/netsynth_handshake.pcap"
+TRAFFIC_TMP="/tmp/netsynth_traffic.pcap"
+rm -f "$HSHAKE_TMP" "$TRAFFIC_TMP"
+
 echo ""
 echo "[1/9] Starting tshark for handshake capture (20 sec)..."
-tshark -i "$INTERFACE" -a duration:20 -f "udp port $PORT" -w captures/handshake.pcap &
+tshark -i "$INTERFACE" -a duration:20 -f "udp port $PORT" -w "$HSHAKE_TMP" 2>&1 &
 TSHARK_PID=$!
 sleep 2
 
@@ -43,10 +49,13 @@ sleep 15
 kill $TSHARK_PID 2>/dev/null || true
 wait $TSHARK_PID 2>/dev/null || true
 
+# Copy from /tmp to captures/
+cp "$HSHAKE_TMP" captures/handshake.pcap 2>/dev/null || true
+
 # --- Step 4: Check file ---
 echo ""
 echo "[4/9] Checking handshake capture..."
-ls -la captures/handshake.pcap
+ls -la captures/handshake.pcap "$HSHAKE_TMP" 2>/dev/null
 echo ""
 
 # --- Step 5: Extract SNI + Ciphers ---
@@ -93,9 +102,10 @@ echo "     Generating load in background..."
 ) &
 LOAD_PID=$!
 
-tshark -i "$INTERFACE" -c 500 -f "udp port $PORT" -w captures/traffic.pcap 2>/dev/null
+tshark -i "$INTERFACE" -c 500 -f "udp port $PORT" -w "$TRAFFIC_TMP" 2>&1
 kill $LOAD_PID 2>/dev/null || true
 wait $LOAD_PID 2>/dev/null || true
+cp "$TRAFFIC_TMP" captures/traffic.pcap 2>/dev/null || true
 
 echo "     Captured: $(tshark -r captures/traffic.pcap 2>/dev/null | wc -l) packets"
 echo ""
