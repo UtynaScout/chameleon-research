@@ -1,0 +1,24 @@
+=====================================
+  NetSynth — Validation Commands
+=====================================
+
+======= СЕРВЕР (77.110.97.128) =======
+
+  cd ~/chameleon-research
+  git pull origin main
+  cd rust-core
+  cargo build --release --examples
+  sudo ./target/release/examples/vpn-server --config configs/vpn-server.toml
+
+
+======= КЛИЕНТ (Ubuntu 22.04) =======
+
+  cd ~/chameleon-research/rust-core
+  git pull origin main
+  cargo build --release --examples
+  sudo bash scripts/validate-all.sh
+
+  >>> Скинь ВЕСЬ вывод <<<
+
+
+=====================================
