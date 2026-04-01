@@ -13,7 +13,23 @@ impl RouteManager {
     /// Add a host route for the VPN server through the original gateway,
     /// preventing the tunnel from routing its own transport traffic.
     pub fn add_server_route(server_ip: &str, gateway: &str) -> Result<(), TunError> {
-        run_cmd("ip", &["route", "add", &format!("{server_ip}/32"), "via", gateway])
+        let dest = format!("{server_ip}/32");
+        // Try to add; if it already exists, silently succeed
+        let output = std::process::Command::new("ip")
+            .args(["route", "add", &dest, "via", gateway])
+            .output()
+            .map_err(|e| TunError::Route(format!("ip: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("File exists") {
+                return Ok(()); // Route already present — OK
+            }
+            return Err(TunError::Route(format!(
+                "ip route add {dest} via {gateway}: {}",
+                stderr.trim()
+            )));
+        }
+        Ok(())
     }
 
     /// Replace the default route to send all traffic through the TUN device.

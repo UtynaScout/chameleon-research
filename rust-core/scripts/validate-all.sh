@@ -26,6 +26,9 @@ echo "[0/9] Cleaning up old processes..."
 pkill -f vpn-client 2>/dev/null || true
 pkill tshark 2>/dev/null || true
 sleep 2
+# Clean stale routes from previous VPN runs
+ip route del 77.110.97.128/32 2>/dev/null || true
+ip route del default dev tun0 2>/dev/null || true
 
 # --- Step 1-3: Capture handshake ---
 HSHAKE_TMP="/tmp/netsynth_handshake.pcap"
@@ -86,19 +89,33 @@ echo "[6/9] JA3 Analysis..."
 echo ""
 
 # --- Step 7: Capture bulk traffic ---
+echo "[7/9] Checking VPN client is alive..."
+if ! kill -0 $VPN_PID 2>/dev/null; then
+    echo "     VPN client died, restarting..."
+    ./target/release/examples/vpn-client --config "$CONFIG" &
+    VPN_PID=$!
+    sleep 5
+fi
+
+# Verify connectivity
+echo "     Testing connectivity..."
+ping -c 2 8.8.8.8 -W 3 > /dev/null 2>&1 && echo "     Connectivity OK" || echo "     WARNING: no connectivity"
+
 echo "[7/9] Capturing 500 packets of VPN traffic..."
 echo "     Generating load in background..."
 
 # Generate traffic in background
 (
     sleep 2
-    ping -c 20 8.8.8.8 > /dev/null 2>&1
+    ping -c 30 8.8.8.8 > /dev/null 2>&1
     curl -s https://example.com > /dev/null 2>&1
     curl -s https://www.google.com > /dev/null 2>&1
     curl -s https://ya.ru > /dev/null 2>&1
     curl -s https://wikipedia.org > /dev/null 2>&1
-    ping -c 20 1.1.1.1 > /dev/null 2>&1
+    ping -c 30 1.1.1.1 > /dev/null 2>&1
     curl -s https://github.com > /dev/null 2>&1
+    curl -s https://httpbin.org/get > /dev/null 2>&1
+    ping -c 30 8.8.4.4 > /dev/null 2>&1
 ) &
 LOAD_PID=$!
 
